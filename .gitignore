@@ -1,16 +1,35 @@
 __pycache__/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 *.pyc
 *.pyo
 .idea/
+.vscode/
 *.egg-info/
 .eggs/
 dist/
 build/
+.venv/
+venv/
+.env
+.env.*
 tmp_smoke/
 results/
+outputs/
+artifacts/
+*.log
+*.err
+*.out
+*.tmp
+.DS_Store
+.ipynb_checkpoints/
 
-# Large data files
+# New large data files. The repository currently tracks a curated subset of
+# paper inputs; keep additional raw logs/models outside Git unless explicitly
+# curated for release.
 data/*.xes
 data/*.xes.pkl
 data/*.pkl

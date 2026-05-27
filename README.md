@@ -18,6 +18,7 @@ method-selection rules reported in the paper.
 - `experiments/`: experiment runner, model loading, and method dispatch.
 - `scripts/`: aggregation, feature engineering, and analysis utilities.
 - `discovery/`: process-model discovery and model-selection helper scripts.
+- `docs/`: repository, data, and experiment-output notes.
 - `tests/`: regression tests for search, feature extraction, and pipelines.
 
 ## Setup
@@ -45,6 +46,8 @@ Run the test suite:
 ```bash
 pytest
 ```
+
+For data and artifact conventions, see `docs/DATA_AND_ARTIFACTS.md`.
 
 Generated experiment outputs can be large and are intentionally ignored by
 default. Keep long-running result directories outside version control unless
