@@ -23,8 +23,10 @@ if str(REPO_ROOT) not in sys.path:
 
 try:
     from experiments.benchmark_loader import load_model
+    from scripts.positional_structure import compute_positional_features
     from scripts.selection_semantics import deduplicate_latest_rows
 except ImportError:  # pragma: no cover - fallback for direct script invocation
+    from positional_structure import compute_positional_features  # type: ignore
     from selection_semantics import deduplicate_latest_rows  # type: ignore
     from experiments.benchmark_loader import load_model  # type: ignore
 
@@ -61,6 +63,7 @@ class ModelCacheEntry:
     enabled_final_count: int
     visible_alphabet: set[str]
     visible_transition_count_by_label: Counter
+    positional_features: Dict[str, float]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -152,6 +155,7 @@ def build_model_cache_entry(model_path: str) -> ModelCacheEntry:
         if transition_count > 0
         else 0.0
     )
+    positional_features = compute_positional_features(wf)
 
     return ModelCacheEntry(
         model_path=model_path,
@@ -167,6 +171,7 @@ def build_model_cache_entry(model_path: str) -> ModelCacheEntry:
         enabled_final_count=len(net.enabled_transitions(wf.final_marking)),
         visible_alphabet=visible_alphabet,
         visible_transition_count_by_label=visible_transition_count_by_label,
+        positional_features=positional_features,
     )
 
 
@@ -434,6 +439,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "trace_max_repetitions": trace_features["trace_max_repetitions"],
             }
         )
+        feature_row.update(model_entry.positional_features)
         feature_row.update(interaction_features)
 
         extraction_ms = (time.perf_counter() - row_start) * 1000.0

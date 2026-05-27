@@ -49,6 +49,12 @@ FAST_FEATURES = [
 ORACLE_FEATURES = [
     "h_f",
     "normalized_h_f",
+    "h_b",
+    "normalized_h_b",
+]
+REQUIRED_ORACLE_FEATURES = [
+    "h_f",
+    "normalized_h_f",
 ]
 
 
@@ -214,12 +220,13 @@ def prepare_merged_dataset(
     oracle_df = pd.read_csv(oracle_csv)
 
     validate_columns(fast_df, KEY_COLS + [target_col, group_col])
-    validate_columns(oracle_df, KEY_COLS + ORACLE_FEATURES)
+    validate_columns(oracle_df, KEY_COLS + REQUIRED_ORACLE_FEATURES)
 
-    merge_cols = KEY_COLS + ORACLE_FEATURES
+    available_oracle_features = [column for column in ORACLE_FEATURES if column in oracle_df.columns]
+    merge_cols = KEY_COLS + available_oracle_features
     merged = fast_df.merge(oracle_df.loc[:, merge_cols], on=KEY_COLS, how="inner")
 
-    feature_cols = FAST_FEATURES + ORACLE_FEATURES
+    feature_cols = FAST_FEATURES + available_oracle_features
     validate_columns(merged, feature_cols)
 
     work = merged.dropna(subset=[target_col, group_col]).copy()
@@ -228,9 +235,9 @@ def prepare_merged_dataset(
     consistent_mask = build_consistency_mask(work, consistency_policy)
     work = work[consistent_mask].copy()
     rows_after_consistency_filter = int(len(work))
-    rows_missing_any_oracle = int(work[ORACLE_FEATURES].isna().any(axis=1).sum())
+    rows_missing_any_oracle = int(work[available_oracle_features].isna().any(axis=1).sum())
     if require_complete_oracle:
-        work = work.dropna(subset=ORACLE_FEATURES, how="any").copy()
+        work = work.dropna(subset=available_oracle_features, how="any").copy()
     work = work.dropna(subset=feature_cols, how="all").reset_index(drop=True)
     return work, feature_cols, {
         "rows_after_target_filter": rows_after_target_filter,

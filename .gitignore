@@ -1,4 +1,5 @@
 __pycache__/
+.pytest_cache/
 *.pyc
 *.pyo
 .idea/
@@ -21,3 +22,5 @@ discovery/models/
 
 # Experiment results (large)
 experiments/results_*/
+experiments/hm_sound_safe_batches_*/
+experiments/targeted_hardcase_*/

@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Iterable, List
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 META_COLUMNS = [
     "aggregate_run_name",
     "aggregate_batch_dir",
@@ -43,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--root-dir",
         type=Path,
-        default=Path("/home/dsi/eli-bogdanov/dropbox_files/Project Code/tmp_smoke"),
+        default=REPO_ROOT / "tmp_smoke",
         help="Root directory to scan for batch_results directories",
     )
     p.add_argument(

@@ -117,6 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
     # --- Filtering ---
     p.add_argument("--max-traces", type=int, default=None,
                    help="Cap on number of traces to process")
+    p.add_argument(
+        "--trace-hash-allowlist",
+        type=str,
+        default=None,
+        help="Optional file with one trace hash per line; only those unique traces are processed",
+    )
     p.add_argument("--trace-shard-count", type=int, default=1,
                    help="Number of deterministic unique-trace shards (default: 1)")
     p.add_argument("--trace-shard-index", type=int, default=0,
@@ -465,6 +471,7 @@ def run_dataset(args):
         max_traces=args.max_traces,
         max_expansions=args.max_expansions,
         timeout_seconds=args.timeout,
+        trace_hash_allowlist_path=args.trace_hash_allowlist,
         trace_shard_count=args.trace_shard_count,
         trace_shard_index=args.trace_shard_index,
         output_dir=args.output_dir,

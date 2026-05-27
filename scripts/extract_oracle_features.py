@@ -249,6 +249,7 @@ def extract_oracle_row(row: Dict[str, object]) -> Dict[str, object]:
         "h_b": np.nan,
         "heuristic_asymmetry": np.nan,
         "normalized_h_f": np.nan,
+        "normalized_h_b": np.nan,
         "oracle_extraction_time_ms": np.nan,
         "failure_reason": pd.NA,
     }
@@ -291,6 +292,7 @@ def extract_oracle_row(row: Dict[str, object]) -> Dict[str, object]:
         result["h_b"] = h_b
         result["heuristic_asymmetry"] = abs(h_f - h_b)
         result["normalized_h_f"] = h_f / max(trace_length, 1)
+        result["normalized_h_b"] = h_b / max(trace_length, 1)
     except Exception as exc:  # pragma: no cover - exercised in smoke/full runs
         result["failure_reason"] = str(exc)
 

@@ -210,6 +210,18 @@ def _trace_hash(trace: List[str]) -> str:
     return hashlib.md5(",".join(trace).encode()).hexdigest()[:12]
 
 
+def _load_trace_hash_allowlist(path: Optional[str]) -> Optional[set]:
+    """Load an optional newline-delimited set of permitted trace hashes."""
+    if not path:
+        return None
+    allowlist_path = Path(path)
+    return {
+        line.strip()
+        for line in allowlist_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+
+
 def _compute_trace_features(trace: List[str]) -> Dict[str, Any]:
     """Compute lightweight trace-level features used for runtime analysis."""
     n = len(trace)
@@ -858,6 +870,7 @@ def run_dataset_experiment(
     algorithms: List[Algorithm] = None,
     heuristics: List[Heuristic] = None,
     max_traces: Optional[int] = None,
+    trace_hash_allowlist_path: Optional[str] = None,
     trace_shard_count: int = 1,
     trace_shard_index: int = 0,
     max_expansions: int = 1_000_000,
@@ -958,7 +971,16 @@ def run_dataset_experiment(
         trace_shard_count=trace_shard_count,
         trace_shard_index=trace_shard_index,
     )
+    allowed_hashes = _load_trace_hash_allowlist(trace_hash_allowlist_path)
+    if allowed_hashes is not None:
+        selected_hashes = selected_hashes & allowed_hashes
     if trace_shard_count > 1:
+        traces = [
+            (trace_id, trace_activities)
+            for trace_id, trace_activities in traces
+            if _trace_hash(trace_activities) in selected_hashes
+        ]
+    elif allowed_hashes is not None:
         traces = [
             (trace_id, trace_activities)
             for trace_id, trace_activities in traces
@@ -1076,6 +1098,8 @@ def run_dataset_experiment(
     if trace_shard_count > 1:
         log.info(f"Shard: {trace_shard_index + 1}/{trace_shard_count}")
         log.info(f"Unique traces in shard: {selected_unique_traces}/{total_unique_traces}")
+    elif allowed_hashes is not None:
+        log.info(f"Unique traces selected by allowlist: {selected_unique_traces}/{total_unique_traces}")
 
     log.info(f"Starting experiment: {n_traces} traces × {n_methods} methods = {n_traces * n_methods} runs")
     visible_labels = _visible_model_labels(wf)

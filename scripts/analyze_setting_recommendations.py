@@ -64,9 +64,7 @@ except ImportError:  # pragma: no cover - fallback for direct invocation
     )
 
 
-DEFAULT_RESULTS_ROOT = Path(
-    "/home/dsi/eli-bogdanov/dropbox_files/Project Code/experiments/results_20260310/"
-)
+DEFAULT_RESULTS_ROOT = REPO_ROOT / "experiments/results_20260310"
 INSTANCE_KEYS = [
     "dataset_name",
     "model_id",
@@ -108,9 +106,11 @@ FAST_FEATURE_COLS = [
     "sp_transitions",
     "sp_branching_factor",
 ]
-DEFAULT_ORACLE_FEATURE_COLS = ["normalized_h_f", "h_f"]
+DEFAULT_ORACLE_FEATURE_COLS = ["normalized_h_f", "normalized_h_b", "h_f", "h_b"]
+OPTIONAL_ORACLE_FEATURE_COLS = {"normalized_h_b", "h_b"}
 ORACLE_FEATURE_CANDIDATES = [
     "normalized_h_f",
+    "normalized_h_b",
     "h_f",
     "h_b",
     "heuristic_asymmetry",
@@ -218,6 +218,12 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=[],
         help="Optional numeric predictor columns to exclude from both the fast-only and oracle-aware variants.",
+    )
+    parser.add_argument(
+        "--primary-metric",
+        choices=["time_seconds", "expansions"],
+        default="time_seconds",
+        help="Primary optimization metric for target construction and recommendation ranking.",
     )
     return parser
 
@@ -483,12 +489,14 @@ def load_oracle_features(
         )
 
     missing_requested_cols = [column for column in requested_cols if column not in oracle_df.columns]
-    if missing_requested_cols:
+    missing_required_cols = [
+        column for column in missing_requested_cols if column not in OPTIONAL_ORACLE_FEATURE_COLS
+    ]
+    if missing_required_cols:
         raise ValueError(
             "Oracle feature CSV is missing requested oracle feature columns: "
-            f"{missing_requested_cols}"
+            f"{missing_required_cols}"
         )
-
     available_cols = [column for column in requested_cols if column in oracle_df.columns]
     selected_cols = list(dict.fromkeys(list(INSTANCE_KEYS) + available_cols))
     selected_df = oracle_df.loc[:, selected_cols].copy()
@@ -509,51 +517,89 @@ def prepare_numeric_metric(df: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(df[column], errors="coerce") if column in df.columns else pd.Series(np.nan, index=df.index)
 
 
+def secondary_metric(primary_metric: str) -> str:
+    return "expansions" if primary_metric == "time_seconds" else "time_seconds"
+
+
+def target_metric_column(target_prefix: str, primary_metric: str) -> str:
+    return f"{target_prefix}_{primary_metric}"
+
+
+def oracle_metric_column(primary_metric: str) -> str:
+    return f"oracle_{primary_metric}"
+
+
+def metric_display_name(primary_metric: str) -> str:
+    return "runtime" if primary_metric == "time_seconds" else "expansions"
+
+
+def regret_units(primary_metric: str) -> str:
+    return "seconds" if primary_metric == "time_seconds" else "expansions"
+
+
 def select_best_rows(
     df: pd.DataFrame,
     label_col: str,
+    primary_metric: str,
     extra_sort_cols: Optional[Sequence[str]] = None,
 ) -> pd.DataFrame:
     work = df.copy()
     work["expansions"] = prepare_numeric_metric(work, "expansions")
     work["time_seconds"] = prepare_numeric_metric(work, "time_seconds")
-    work = work.dropna(subset=["expansions"]).copy()
-    sort_cols = INSTANCE_KEYS + ["expansions", "time_seconds", label_col]
+    secondary = secondary_metric(primary_metric)
+    work = work.dropna(subset=[primary_metric]).copy()
+    sort_cols = INSTANCE_KEYS + [primary_metric, secondary, label_col]
     if extra_sort_cols:
         sort_cols.extend(extra_sort_cols)
     work = work.sort_values(sort_cols, kind="stable")
     return work.drop_duplicates(subset=INSTANCE_KEYS, keep="first").reset_index(drop=True)
 
 
-def build_target_tables(valid_df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, pd.DataFrame]]:
+def build_target_tables(
+    valid_df: pd.DataFrame,
+    primary_metric: str = "expansions",
+) -> tuple[pd.DataFrame, Dict[str, pd.DataFrame]]:
     valid = valid_df.copy()
     valid["expansions"] = prepare_numeric_metric(valid, "expansions")
     valid["time_seconds"] = prepare_numeric_metric(valid, "time_seconds")
-    valid = valid.dropna(subset=["expansions"]).copy()
+    secondary = secondary_metric(primary_metric)
+    valid = valid.dropna(subset=[primary_metric]).copy()
 
-    best_method_rows = select_best_rows(valid, "method")
-    best_method = best_method_rows.loc[:, INSTANCE_KEYS + ["method", "expansions"]].rename(
-        columns={"method": "best_method", "expansions": "best_method_expansions"}
+    best_method_rows = select_best_rows(valid, "method", primary_metric)
+    best_method = best_method_rows.loc[:, INSTANCE_KEYS + ["method", "time_seconds", "expansions"]].rename(
+        columns={
+            "method": "best_method",
+            "time_seconds": "best_method_time_seconds",
+            "expansions": "best_method_expansions",
+        }
     )
 
     algorithm_valid = (
-        valid.sort_values(INSTANCE_KEYS + ["algorithm", "expansions", "time_seconds", "method"], kind="stable")
+        valid.sort_values(INSTANCE_KEYS + ["algorithm", primary_metric, secondary, "method"], kind="stable")
         .drop_duplicates(subset=INSTANCE_KEYS + ["algorithm"], keep="first")
         .reset_index(drop=True)
     )
-    best_algorithm_rows = select_best_rows(algorithm_valid, "algorithm")
-    best_algorithm = best_algorithm_rows.loc[:, INSTANCE_KEYS + ["algorithm", "expansions"]].rename(
-        columns={"algorithm": "best_algorithm", "expansions": "best_algorithm_expansions"}
+    best_algorithm_rows = select_best_rows(algorithm_valid, "algorithm", primary_metric)
+    best_algorithm = best_algorithm_rows.loc[:, INSTANCE_KEYS + ["algorithm", "time_seconds", "expansions"]].rename(
+        columns={
+            "algorithm": "best_algorithm",
+            "time_seconds": "best_algorithm_time_seconds",
+            "expansions": "best_algorithm_expansions",
+        }
     )
 
     heuristic_valid = (
-        valid.sort_values(INSTANCE_KEYS + ["heuristic", "expansions", "time_seconds", "method"], kind="stable")
+        valid.sort_values(INSTANCE_KEYS + ["heuristic", primary_metric, secondary, "method"], kind="stable")
         .drop_duplicates(subset=INSTANCE_KEYS + ["heuristic"], keep="first")
         .reset_index(drop=True)
     )
-    best_heuristic_rows = select_best_rows(heuristic_valid, "heuristic")
-    best_heuristic = best_heuristic_rows.loc[:, INSTANCE_KEYS + ["heuristic", "expansions"]].rename(
-        columns={"heuristic": "best_heuristic", "expansions": "best_heuristic_expansions"}
+    best_heuristic_rows = select_best_rows(heuristic_valid, "heuristic", primary_metric)
+    best_heuristic = best_heuristic_rows.loc[:, INSTANCE_KEYS + ["heuristic", "time_seconds", "expansions"]].rename(
+        columns={
+            "heuristic": "best_heuristic",
+            "time_seconds": "best_heuristic_time_seconds",
+            "expansions": "best_heuristic_expansions",
+        }
     )
 
     targets = best_method.merge(best_algorithm, on=INSTANCE_KEYS, how="left").merge(
@@ -570,7 +616,9 @@ def build_label_observations(
     complete_df: pd.DataFrame,
     targets_df: pd.DataFrame,
     label_type: str,
+    primary_metric: str,
 ) -> pd.DataFrame:
+    oracle_col = oracle_metric_column(primary_metric)
     if label_type == LABEL_TYPE_METHOD:
         label_col = "method"
         obs = complete_df.copy()
@@ -582,17 +630,17 @@ def build_label_observations(
         obs["expansions"] = prepare_numeric_metric(obs, "expansions")
         obs["time_seconds"] = prepare_numeric_metric(obs, "time_seconds")
         merged = obs.merge(
-            targets_df.loc[:, INSTANCE_KEYS + ["best_method", "best_method_expansions"]],
+            targets_df.loc[:, INSTANCE_KEYS + ["best_method", target_metric_column("best_method", primary_metric)]],
             on=INSTANCE_KEYS,
             how="inner",
         )
-        merged["oracle_expansions"] = merged["best_method_expansions"]
+        merged[oracle_col] = merged[target_metric_column("best_method", primary_metric)]
         merged["winner_flag"] = merged["label"].eq(merged["best_method"])
-        return merged.loc[:, INSTANCE_KEYS + ["label", "valid", "expansions", "time_seconds", "oracle_expansions", "winner_flag"]]
+        return merged.loc[:, INSTANCE_KEYS + ["label", "valid", "expansions", "time_seconds", oracle_col, "winner_flag"]]
 
     group_col = "algorithm" if label_type == LABEL_TYPE_ALGORITHM else "heuristic"
     target_col = "best_algorithm" if label_type == LABEL_TYPE_ALGORITHM else "best_heuristic"
-    oracle_col = f"{target_col}_expansions"
+    target_metric_col = target_metric_column(target_col, primary_metric)
 
     complete = complete_df.copy()
     complete["valid"] = False
@@ -604,7 +652,7 @@ def build_label_observations(
 
     rows: List[pd.DataFrame] = []
     for _, group in complete.groupby(INSTANCE_KEYS + [group_col], dropna=False):
-        valid_group = group[group["valid"] & group["expansions"].notna()].copy()
+        valid_group = group[group["valid"] & group[primary_metric].notna()].copy()
         if valid_group.empty:
             rows.append(
                 group.iloc[[0]].assign(
@@ -616,17 +664,17 @@ def build_label_observations(
             )
         else:
             sorted_group = valid_group.sort_values(
-                ["expansions", "time_seconds", "method"],
+                [primary_metric, secondary_metric(primary_metric), "method"],
                 kind="stable",
             )
             best = sorted_group.iloc[[0]].assign(label=sorted_group.iloc[0][group_col])
             rows.append(best)
 
     obs = pd.concat(rows, ignore_index=True, sort=False) if rows else pd.DataFrame(columns=INSTANCE_KEYS + ["label"])
-    merged = obs.merge(targets_df.loc[:, INSTANCE_KEYS + [target_col, oracle_col]], on=INSTANCE_KEYS, how="inner")
-    merged["oracle_expansions"] = merged[oracle_col]
+    merged = obs.merge(targets_df.loc[:, INSTANCE_KEYS + [target_col, target_metric_col]], on=INSTANCE_KEYS, how="inner")
+    merged[oracle_col] = merged[target_metric_col]
     merged["winner_flag"] = merged["label"].eq(merged[target_col])
-    return merged.loc[:, INSTANCE_KEYS + ["label", "valid", "expansions", "time_seconds", "oracle_expansions", "winner_flag"]]
+    return merged.loc[:, INSTANCE_KEYS + ["label", "valid", "expansions", "time_seconds", oracle_col, "winner_flag"]]
 
 
 def compute_predictor_columns(
@@ -653,6 +701,9 @@ def compute_predictor_columns(
         "best_method",
         "best_algorithm",
         "best_heuristic",
+        "best_method_time_seconds",
+        "best_algorithm_time_seconds",
+        "best_heuristic_time_seconds",
         "best_method_expansions",
         "best_algorithm_expansions",
         "best_heuristic_expansions",
@@ -759,6 +810,7 @@ def summarize_partition_recommendations(
     observations: pd.DataFrame,
     partition_cols: Sequence[str],
     coverage_tolerance: float,
+    primary_metric: str = "expansions",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     partition_cols = list(partition_cols)
     labels = sorted(observations["label"].dropna().astype(str).unique().tolist())
@@ -767,6 +819,7 @@ def summarize_partition_recommendations(
     support_df = partition_keys.groupby(partition_cols, dropna=False).size().reset_index(name="partition_support")
     merged = observations.merge(partition_keys, on=INSTANCE_KEYS, how="inner")
 
+    oracle_col = oracle_metric_column(primary_metric)
     rows: List[Dict[str, object]] = []
     recommendations: List[Dict[str, object]] = []
     for support_row in support_df.to_dict(orient="records"):
@@ -781,7 +834,7 @@ def summarize_partition_recommendations(
             valid_count = int(valid_mask.sum())
             coverage = float(valid_count / support) if support else 0.0
             regrets = (
-                label_subset.loc[valid_mask, "expansions"] - label_subset.loc[valid_mask, "oracle_expansions"]
+                label_subset.loc[valid_mask, primary_metric] - label_subset.loc[valid_mask, oracle_col]
             )
             winner_share = float(label_subset["winner_flag"].fillna(False).sum() / support) if support else 0.0
             rows.append(
@@ -794,7 +847,7 @@ def summarize_partition_recommendations(
                     "mean_oracle_regret": float(regrets.mean()) if not regrets.empty else np.nan,
                     "median_oracle_regret": float(regrets.median()) if not regrets.empty else np.nan,
                     "winner_share": winner_share,
-                    "median_expansions": float(label_subset.loc[valid_mask, "expansions"].median())
+                    "median_metric_value": float(label_subset.loc[valid_mask, primary_metric].median())
                     if valid_count
                     else np.nan,
                 }
@@ -808,10 +861,10 @@ def summarize_partition_recommendations(
         best_coverage = float(group["valid_coverage"].max())
         candidates = group[group["valid_coverage"] >= best_coverage - coverage_tolerance - 1e-12].copy()
         candidates["mean_oracle_regret_rank"] = candidates["mean_oracle_regret"].fillna(np.inf)
-        candidates["median_expansions_rank"] = candidates["median_expansions"].fillna(np.inf)
+        candidates["median_metric_value_rank"] = candidates["median_metric_value"].fillna(np.inf)
         winner_rank = -candidates["winner_share"]
         best = candidates.assign(_winner_rank=winner_rank).sort_values(
-            ["mean_oracle_regret_rank", "_winner_rank", "median_expansions_rank", "label"],
+            ["mean_oracle_regret_rank", "_winner_rank", "median_metric_value_rank", "label"],
             kind="stable",
         ).iloc[0]
         recommendations.append(
@@ -828,8 +881,8 @@ def summarize_partition_recommendations(
                 if pd.notna(best["median_oracle_regret"])
                 else np.nan,
                 "recommended_label_winner_share": float(best["winner_share"]),
-                "recommended_label_median_expansions": float(best["median_expansions"])
-                if pd.notna(best["median_expansions"])
+                "recommended_label_median_metric_value": float(best["median_metric_value"])
+                if pd.notna(best["median_metric_value"])
                 else np.nan,
             }
         )
@@ -853,6 +906,7 @@ def evaluate_recommendations(
     recommendations_df: pd.DataFrame,
     observations: pd.DataFrame,
     label_target_col: str,
+    primary_metric: str = "expansions",
 ) -> Dict[str, float]:
     if assigned_instances.empty:
         return {
@@ -870,13 +924,13 @@ def evaluate_recommendations(
     )
     obs = observations.rename(columns={"label": "recommended_label"})
     eval_df = eval_df.merge(
-        obs.loc[:, INSTANCE_KEYS + ["recommended_label", "valid", "expansions", "oracle_expansions", "winner_flag"]],
+        obs.loc[:, INSTANCE_KEYS + ["recommended_label", "valid", primary_metric, oracle_metric_column(primary_metric), "winner_flag"]],
         on=INSTANCE_KEYS + ["recommended_label"],
         how="left",
     )
     # Avoid repeated object-dtype fillna warnings in the hot evaluation loop.
     valid_mask = eval_df["valid"].eq(True)
-    regrets = eval_df.loc[valid_mask, "expansions"] - eval_df.loc[valid_mask, "oracle_expansions"]
+    regrets = eval_df.loc[valid_mask, primary_metric] - eval_df.loc[valid_mask, oracle_metric_column(primary_metric)]
     winner_share = float(eval_df["winner_flag"].eq(True).mean()) if len(eval_df) else np.nan
     best_accuracy = (
         float(eval_df["recommended_label"].eq(eval_df[label_target_col]).mean())
@@ -900,6 +954,7 @@ def build_grouped_validation_artifacts(
     max_depth: int,
     min_samples_leaf: int,
     group_col: str,
+    primary_metric: str = "expansions",
     progress_out_dir: Optional[Path] = None,
     progress_label: str = "main",
 ) -> List[Dict[str, object]]:
@@ -939,11 +994,12 @@ def build_grouped_validation_artifacts(
             method_observations.merge(train_df.loc[:, INSTANCE_KEYS], on=INSTANCE_KEYS, how="inner"),
             [LEAF_ID_COL],
             coverage_tolerance,
+            primary_metric,
         )
 
         test_assign = test_df.loc[:, INSTANCE_KEYS + ["best_method"]].copy()
         test_assign[LEAF_ID_COL] = apply_tree_partition(fit_result, test_df.loc[:, predictor_cols])
-        metrics = evaluate_recommendations(test_assign, train_recs, method_observations, "best_method")
+        metrics = evaluate_recommendations(test_assign, train_recs, method_observations, "best_method", primary_metric)
         artifacts.append(
             {
                 "fold": fold_idx,
@@ -998,6 +1054,7 @@ def run_grouped_validation(
     max_depth: int,
     min_samples_leaf: int,
     group_col: str,
+    primary_metric: str = "expansions",
 ) -> pd.DataFrame:
     artifacts = build_grouped_validation_artifacts(
         modeling_df=modeling_df,
@@ -1007,6 +1064,7 @@ def run_grouped_validation(
         max_depth=max_depth,
         min_samples_leaf=min_samples_leaf,
         group_col=group_col,
+        primary_metric=primary_metric,
     )
     return artifacts_to_validation_df(artifacts)
 
@@ -1028,6 +1086,7 @@ def run_grouped_permutation_importance(
     predictor_cols: Sequence[str],
     method_observations: pd.DataFrame,
     n_repeats: int,
+    primary_metric: str = "expansions",
     random_state: int = 42,
     progress_out_dir: Optional[Path] = None,
     progress_label: str = "main",
@@ -1098,7 +1157,13 @@ def run_grouped_permutation_importance(
                 permuted_predictors[feature] = rng.permutation(feature_values)
                 test_assign = test_df.loc[:, INSTANCE_KEYS + ["best_method"]].copy()
                 test_assign[LEAF_ID_COL] = apply_tree_partition(fit_result, permuted_predictors)
-                permuted_metrics = evaluate_recommendations(test_assign, train_recs, method_observations, "best_method")
+                permuted_metrics = evaluate_recommendations(
+                    test_assign,
+                    train_recs,
+                    method_observations,
+                    "best_method",
+                    primary_metric,
+                )
                 detail_rows.append(
                     {
                         "feature": feature,
@@ -1183,6 +1248,7 @@ def build_appendix_buckets(
     predictor_cols: Sequence[str],
     method_observations: pd.DataFrame,
     coverage_tolerance: float,
+    primary_metric: str = "expansions",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     rows: List[pd.DataFrame] = []
     for feature in predictor_cols:
@@ -1205,6 +1271,7 @@ def build_appendix_buckets(
         method_observations,
         ["dataset_name", "bucket_feature", "bucket_label"],
         coverage_tolerance,
+        primary_metric,
     )
 
 
@@ -1241,6 +1308,7 @@ def run_analysis_variant(
     min_samples_leaf: int,
     group_col: str,
     permutation_repeats: int,
+    primary_metric: str,
     out_dir: Path,
     progress_label: str,
 ) -> Dict[str, object]:
@@ -1274,18 +1342,21 @@ def run_analysis_variant(
         method_observations,
         [LEAF_ID_COL],
         coverage_tolerance,
+        primary_metric,
     )
     leaf_algorithm_metrics, leaf_algorithm_recs = summarize_partition_recommendations(
         variant_df.loc[:, INSTANCE_KEYS + [LEAF_ID_COL]],
         algorithm_observations,
         [LEAF_ID_COL],
         coverage_tolerance,
+        primary_metric,
     )
     leaf_heuristic_metrics, leaf_heuristic_recs = summarize_partition_recommendations(
         variant_df.loc[:, INSTANCE_KEYS + [LEAF_ID_COL]],
         heuristic_observations,
         [LEAF_ID_COL],
         coverage_tolerance,
+        primary_metric,
     )
 
     leaf_summary = rename_recommendation_columns(leaf_method_recs, "method").merge(
@@ -1319,6 +1390,7 @@ def run_analysis_variant(
         max_depth=max_depth,
         min_samples_leaf=min_samples_leaf,
         group_col=group_col,
+        primary_metric=primary_metric,
         progress_out_dir=out_dir,
         progress_label=progress_label,
     )
@@ -1334,6 +1406,7 @@ def run_analysis_variant(
         predictor_cols=predictor_cols,
         method_observations=method_observations,
         n_repeats=permutation_repeats,
+        primary_metric=primary_metric,
         progress_out_dir=out_dir,
         progress_label=progress_label,
     )
@@ -1367,11 +1440,21 @@ def build_markdown_summary(
     permutation_summary: pd.DataFrame,
     oracle_ablation_summary: Optional[Dict[str, object]] = None,
 ) -> str:
+    primary_metric = str(summary_json.get("primary_optimization_metric", "time_seconds"))
+    regret_label = "mean_runtime_regret_seconds" if primary_metric == "time_seconds" else "mean_expansion_regret"
+    importance_label = "runtime_regret_increase_seconds" if primary_metric == "time_seconds" else "expansion_regret_increase"
+    oracle_label = (
+        "Oracle variant validation mean runtime regret (seconds)"
+        if primary_metric == "time_seconds"
+        else "Oracle variant validation mean expansion regret"
+    )
     lines = [
         "# Setting Recommendation Summary",
         "",
         f"- Instances modeled: {summary_json['instances_modeled']}",
         f"- Predictor columns: {summary_json['predictor_count']}",
+        f"- Primary optimization metric: {summary_json.get('primary_optimization_metric', 'time_seconds')}",
+        f"- Regret units: {summary_json.get('regret_units', 'seconds')}",
         f"- Leaves: {summary_json['leaf_count_total']}",
         f"- Guardrail triggered: {summary_json['tree_guardrail_triggered']}",
         "",
@@ -1386,7 +1469,7 @@ def build_markdown_summary(
             lines.append(
                 f"- Leaf {int(row['leaf_id'])}: support={int(row['leaf_support'])}, "
                 f"method={row['recommended_method']}, coverage={row['recommended_method_valid_coverage']:.3f}, "
-                f"mean_regret={row['recommended_method_mean_oracle_regret']:.3f}"
+                f"{regret_label}={row['recommended_method_mean_oracle_regret']:.3f}"
             )
     lines.extend(["", "## Top Importance Signals", ""])
     if permutation_summary.empty:
@@ -1395,7 +1478,7 @@ def build_markdown_summary(
         top_features = permutation_summary.head(8)
         for _, row in top_features.iterrows():
             lines.append(
-                f"- {row['feature']}: regret_increase={row['mean_regret_increase']:.4f}, "
+                f"- {row['feature']}: {importance_label}={row['mean_regret_increase']:.4f}, "
                 f"coverage_drop={row['mean_valid_coverage_drop']:.4f}, "
                 f"winner_share_drop={row['mean_winner_share_drop']:.4f}"
             )
@@ -1408,7 +1491,7 @@ def build_markdown_summary(
             f"- Oracle variant predictors: {oracle_ablation_summary.get('predictor_count', 0)}"
         )
         lines.append(
-            f"- Oracle variant validation mean regret: {oracle_ablation_summary.get('validation_mean_oracle_regret', np.nan):.4f}"
+            f"- {oracle_label}: {oracle_ablation_summary.get('validation_mean_oracle_regret', np.nan):.4f}"
         )
     return "\n".join(lines) + "\n"
 
@@ -1434,7 +1517,7 @@ def rename_recommendation_columns(df: pd.DataFrame, prefix: str) -> pd.DataFrame
         "recommended_label_mean_oracle_regret": f"recommended_{prefix}_mean_oracle_regret",
         "recommended_label_median_oracle_regret": f"recommended_{prefix}_median_oracle_regret",
         "recommended_label_winner_share": f"recommended_{prefix}_winner_share",
-        "recommended_label_median_expansions": f"recommended_{prefix}_median_expansions",
+        "recommended_label_median_metric_value": f"recommended_{prefix}_median_metric_value",
     }
     return df.rename(columns=rename_map)
 
@@ -1483,12 +1566,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         oracle_enabled=bool(not oracle_features_df.empty),
     )
 
-    targets_df, _ = build_target_tables(valid_df)
+    targets_df, _ = build_target_tables(valid_df, args.primary_metric)
     modeling_df = fast_instance_with_features.merge(targets_df, on=INSTANCE_KEYS, how="inner")
     oracle_modeling_input_df = oracle_instance_with_features.merge(targets_df, on=INSTANCE_KEYS, how="inner")
-    method_observations = build_label_observations(complete_df, targets_df, LABEL_TYPE_METHOD)
-    algorithm_observations = build_label_observations(complete_df, targets_df, LABEL_TYPE_ALGORITHM)
-    heuristic_observations = build_label_observations(complete_df, targets_df, LABEL_TYPE_HEURISTIC)
+    method_observations = build_label_observations(complete_df, targets_df, LABEL_TYPE_METHOD, args.primary_metric)
+    algorithm_observations = build_label_observations(complete_df, targets_df, LABEL_TYPE_ALGORITHM, args.primary_metric)
+    heuristic_observations = build_label_observations(complete_df, targets_df, LABEL_TYPE_HEURISTIC, args.primary_metric)
     emit_progress(
         args.out_dir,
         "observations_ready",
@@ -1515,6 +1598,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         min_samples_leaf=min_leaf,
         group_col=args.group_col,
         permutation_repeats=args.permutation_repeats,
+        primary_metric=args.primary_metric,
         out_dir=args.out_dir,
         progress_label="main",
     )
@@ -1538,6 +1622,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             predictor_cols,
             method_observations,
             args.coverage_tolerance,
+            args.primary_metric,
         )
         emit_progress(
             args.out_dir,
@@ -1567,6 +1652,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             min_samples_leaf=min_leaf,
             group_col=args.group_col,
             permutation_repeats=args.permutation_repeats,
+            primary_metric=args.primary_metric,
             out_dir=args.out_dir,
             progress_label="oracle",
         )
@@ -1609,10 +1695,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         OUTPUT_INSTANCE_COLS
         + [
             "best_method",
+            "best_method_time_seconds",
             "best_method_expansions",
             "best_algorithm",
+            "best_algorithm_time_seconds",
             "best_algorithm_expansions",
             "best_heuristic",
+            "best_heuristic_time_seconds",
             "best_heuristic_expansions",
         ],
     ].copy()
@@ -1626,6 +1715,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "instances_modeled": int(len(modeling_with_leaves)),
         "instances_dropped_for_feature_failures": int(len(feature_failures_df)),
         "rows_after_feature_merge": int(len(fast_instance_with_features)),
+        "primary_optimization_metric": args.primary_metric,
+        "regret_units": regret_units(args.primary_metric),
         "predictor_columns": predictor_cols,
         "predictor_count": int(len(predictor_cols)),
         "excluded_predictor_columns": list(args.exclude_predictor_cols),

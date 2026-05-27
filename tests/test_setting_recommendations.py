@@ -337,6 +337,7 @@ def test_setting_recommendations_pipeline_outputs(tmp_path: Path, monkeypatch):
     assert summary["rows_after_deduplication"] == 18
     assert summary["rows_after_consensus_optimal_filter"] == 14
     assert summary["instances_modeled"] == 6
+    assert summary["primary_optimization_metric"] == "time_seconds"
     assert summary["tree_guardrail_triggered"] is False
     assert "optimal_cost" not in summary["predictor_columns"]
     assert "sp_nodes" not in summary["predictor_columns"]
@@ -362,7 +363,7 @@ def test_setting_recommendations_pipeline_outputs(tmp_path: Path, monkeypatch):
     assignments = pd.read_csv(out_dir / "setting_leaf_assignments.csv")
     h3_leaf_id = assignments.loc[assignments["trace_hash"] == "h3", setting_rec.LEAF_ID_COL].iloc[0]
     h3_leaf = leaf_summary[leaf_summary["leaf_id"] == h3_leaf_id].iloc[0]
-    assert h3_leaf["recommended_method"] == "forward_zero"
+    assert h3_leaf["recommended_method"] == "backward_me"
     assert h3_leaf["recommended_method_valid_coverage"] == 1.0
     assert int(leaf_summary["leaf_count_total"].max()) >= 2
 
